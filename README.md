@@ -29,6 +29,19 @@ What `npm run setup` does automatically:
 
 After running setup, open **Antigravity -> Additional Options (`...`) -> MCP Servers -> Refresh** (or start a new chat).
 
+### Windows Troubleshooting / Lưu ý trên Windows
+
+- **PowerShell blocks `npm.ps1` (`ExecutionPolicy`):** Run the setup script directly with Node.js instead of `npm`:
+  ```powershell
+  node ./scripts/install.js
+  ```
+- **VS Code extension not showing in `code --list-extensions`:** If `install.js` fails to install the `.vsix` due to `cmd.exe` quote escaping, install the packaged VSIX directly:
+  ```powershell
+  code --install-extension ./dist/vscode-antigravity-mcp-1.0.0.vsix --force
+  code --list-extensions --show-versions
+  ```
+  *(For custom VS Code profiles, add `--profile "<ProfileName>"`.)*
+
 ---
 
 ## Manual MCP Configuration (Other MCP Clients)
