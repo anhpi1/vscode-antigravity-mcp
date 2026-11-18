@@ -1,0 +1,26 @@
+{
+  "name": "vscode-antigravity-mcp",
+  "displayName": "VS Code Antigravity MCP Bridge",
+  "description": "Exposes live VS Code editor state (cursor, selection, diagnostics, tabs) and Remote-SSH/WSL/Container file & terminal operations to MCP clients.",
+  "publisher": "anhpi1",
+  "version": "1.0.0",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscodeAntigravityMcp.dumpState",
+        "title": "VS Code MCP Bridge: Show Current Editor State"
+      }
+    ]
+  }
+}

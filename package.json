@@ -1,0 +1,34 @@
+{
+  "name": "vscode-antigravity-mcp",
+  "version": "1.0.0",
+  "description": "Zero-dependency MCP Server & VS Code UI Extension bridging Antigravity (and any MCP client) with Local and Remote-SSH/WSL/Container VS Code windows.",
+  "author": "anhpi1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anhpi1/vscode-antigravity-mcp.git"
+  },
+  "bin": {
+    "vscode-antigravity-mcp": "./src/mcp-server.js"
+  },
+  "scripts": {
+    "build": "node ./scripts/pack-vsix.js",
+    "setup": "node ./scripts/install.js",
+    "uninstall-bridge": "node ./scripts/uninstall.js",
+    "start": "node ./src/mcp-server.js",
+    "test": "node ./test/test-mcp.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "vscode",
+    "vscode-extension",
+    "antigravity",
+    "remote-ssh",
+    "wsl",
+    "ai-agent"
+  ]
+}
