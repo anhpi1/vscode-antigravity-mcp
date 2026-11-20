@@ -6,6 +6,10 @@ const path = require('path');
 const os = require('os');
 const http = require('http');
 const cp = require('child_process');
+const crypto = require('crypto');
+
+const MD_PREVIEW_VIEW_TYPE = 'vscodeAntigravityMcp.markdownPreview';
+const previewPanels = new Map();
 
 const STATE_DIR = process.env.ANTIGRAVITY_VSCODE_BRIDGE_DIR || path.join(os.homedir(), '.antigravity-vscode-bridge');
 const WINDOWS_DIR = path.join(STATE_DIR, 'windows');
@@ -35,6 +39,11 @@ function detectRemoteAuthority() {
   const ed = vscode.window.activeTextEditor;
   if (ed && ed.document.uri.scheme === 'vscode-remote' && ed.document.uri.authority) {
     knownRemoteAuthority = ed.document.uri.authority;
+    return knownRemoteAuthority;
+  }
+  const activeTabResult = getActiveTabInfo();
+  if (activeTabResult && activeTabResult.uri && activeTabResult.uri.scheme === 'vscode-remote' && activeTabResult.uri.authority) {
+    knownRemoteAuthority = activeTabResult.uri.authority;
     return knownRemoteAuthority;
   }
   for (const doc of vscode.workspace.textDocuments) {
@@ -89,33 +98,311 @@ function joinChildUri(dirUri, name) {
   return dirUri.with({ path: path.posix.join(dirUri.path, name) });
 }
 
+function resolvePreviewWebviewUri(tab) {
+  const rawLabel = typeof tab.label === 'string' ? tab.label.trim() : '';
+  const targetName = rawLabel.replace(/^Preview\s+/i, '').trim();
+  if (!targetName) return null;
+
+  const isWin = process.platform === 'win32';
+  const norm = (s) => (isWin ? s.toLowerCase() : s);
+  const want = norm(targetName);
+  const candidates = new Map();
+
+  for (const doc of vscode.workspace.textDocuments) {
+    if (doc.uri.scheme !== 'file' && doc.uri.scheme !== 'vscode-remote') continue;
+    const p = formatUriPath(doc.uri);
+    if (!p) continue;
+    const base = doc.uri.scheme === 'file' ? path.basename(p) : path.posix.basename(p);
+    if (norm(base) === want) {
+      candidates.set(doc.uri.toString(), doc.uri);
+    }
+  }
+
+  if (candidates.size === 1) {
+    return Array.from(candidates.values())[0];
+  }
+
+  if (candidates.size === 0) {
+    for (const folder of vscode.workspace.workspaceFolders || []) {
+      if (folder.uri.scheme !== 'file') continue;
+      const direct = path.join(folder.uri.fsPath, targetName);
+      if (fs.existsSync(direct)) {
+        const uri = vscode.Uri.file(direct);
+        candidates.set(uri.toString(), uri);
+      }
+    }
+    if (candidates.size === 1) {
+      return Array.from(candidates.values())[0];
+    }
+  }
+
+  return null;
+}
+
+function inspectTab(tab, isActiveGroup = false) {
+  const input = tab.input;
+  let tabType = 'unknown';
+  let viewType = null;
+  let uri = null;
+  let originalFilePath = null;
+  let modifiedFilePath = null;
+
+  if (input instanceof vscode.TabInputText) {
+    tabType = 'text';
+    uri = input.uri;
+  } else if (input instanceof vscode.TabInputCustom) {
+    tabType = 'custom';
+    viewType = input.viewType || null;
+    uri = input.uri;
+  } else if (input instanceof vscode.TabInputTextDiff) {
+    tabType = 'diff';
+    originalFilePath = formatUriPath(input.original);
+    modifiedFilePath = formatUriPath(input.modified);
+    uri = input.modified || input.original;
+  } else if (input instanceof vscode.TabInputNotebook) {
+    tabType = 'notebook';
+    viewType = input.notebookType || null;
+    uri = input.uri;
+  } else if (input instanceof vscode.TabInputNotebookDiff) {
+    tabType = 'notebookDiff';
+    viewType = input.notebookType || null;
+    originalFilePath = formatUriPath(input.original);
+    modifiedFilePath = formatUriPath(input.modified);
+    uri = input.modified || input.original;
+  } else if (input instanceof vscode.TabInputWebview) {
+    tabType = 'webview';
+    viewType = input.viewType || null;
+    if (viewType && /markdown\.preview/i.test(viewType)) {
+      uri = resolvePreviewWebviewUri(tab);
+    }
+  } else if (input instanceof vscode.TabInputTerminal) {
+    tabType = 'terminal';
+  } else if (input && input.uri) {
+    uri = input.uri;
+    viewType = input.viewType || null;
+  }
+
+  const filePath = formatUriPath(uri);
+  const uriStr = uri ? uri.toString() : null;
+  const info = {
+    label: tab.label,
+    isActive: tab.isActive,
+    isActiveGroup: Boolean(isActiveGroup),
+    isPreview: Boolean(tab.isPreview),
+    isDirty: tab.isDirty,
+    tabType,
+    viewType,
+    filePath,
+    uri: uriStr
+  };
+  if (originalFilePath || modifiedFilePath) {
+    info.originalFilePath = originalFilePath;
+    info.modifiedFilePath = modifiedFilePath;
+  }
+  return { info, uri };
+}
+
+function getActiveTabInfo() {
+  try {
+    const activeGroup = vscode.window.tabGroups.activeTabGroup;
+    if (activeGroup && activeGroup.activeTab) {
+      return inspectTab(activeGroup.activeTab, true);
+    }
+  } catch (_) {}
+  return null;
+}
+
 function collectOpenTabs() {
   const tabs = [];
   try {
     for (const group of vscode.window.tabGroups.all) {
       for (const tab of group.tabs) {
-        let uriStr = null;
-        let filePath = null;
-        if (tab.input && tab.input.uri) {
-          uriStr = tab.input.uri.toString();
-          filePath = formatUriPath(tab.input.uri);
-        }
-        tabs.push({
-          label: tab.label,
-          isActive: tab.isActive,
-          isDirty: tab.isDirty,
-          filePath,
-          uri: uriStr
-        });
+        tabs.push(inspectTab(tab, group.isActive).info);
       }
     }
   } catch (_) {}
   return tabs;
 }
 
+function getActivePreviewEntry(activeTab) {
+  for (const [panel, entry] of previewPanels.entries()) {
+    if (panel.active) return entry;
+  }
+  if (activeTab && activeTab.viewType === MD_PREVIEW_VIEW_TYPE && activeTab.uri) {
+    for (const entry of previewPanels.values()) {
+      if (entry.uri && entry.uri.toString() === activeTab.uri) return entry;
+    }
+  }
+  return null;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function buildMarkdownPreviewHtml(webview, bodyHtml, nonce) {
+  const csp = [
+    "default-src 'none'",
+    `img-src ${webview.cspSource} https: http: data:`,
+    "style-src 'unsafe-inline'",
+    `script-src 'nonce-${nonce}'`
+  ].join('; ');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      color: var(--vscode-editor-foreground);
+      background-color: var(--vscode-editor-background);
+      font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+      font-size: var(--vscode-font-size, 14px);
+      line-height: 1.65;
+      padding: 20px 32px 60px;
+      max-width: 960px;
+      margin: 0 auto;
+      word-wrap: break-word;
+    }
+    a { color: var(--vscode-textLink-foreground); }
+    h1, h2, h3, h4 {
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
+      padding-bottom: 0.25em;
+    }
+    h3, h4 { border-bottom: none; }
+    code {
+      font-family: var(--vscode-editor-font-family, monospace);
+      background-color: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+      padding: 0.15em 0.35em;
+      border-radius: 3px;
+    }
+    pre {
+      background-color: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+      padding: 12px 14px;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+    pre code { background: none; padding: 0; }
+    blockquote {
+      margin: 0.8em 0;
+      padding: 0.4em 1em;
+      background-color: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.1));
+      border-left: 4px solid var(--vscode-textBlockQuote-border, #007acc);
+    }
+    table { border-collapse: collapse; margin: 1em 0; width: 100%; }
+    th, td {
+      border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+      padding: 6px 10px;
+      text-align: left;
+    }
+    th { background-color: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.12)); }
+    img { max-width: 100%; height: auto; }
+    hr { border: 0; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); }
+  </style>
+</head>
+<body>
+  <div id="content">${bodyHtml}</div>
+  <script nonce="${nonce}">
+    (function () {
+      const vscode = acquireVsCodeApi();
+      let timer = null;
+      let lastText = '';
+      function reportSelection() {
+        const sel = window.getSelection();
+        const text = sel ? sel.toString() : '';
+        if (text === lastText) return;
+        lastText = text;
+        vscode.postMessage({ type: 'selection', text });
+      }
+      document.addEventListener('selectionchange', () => {
+        clearTimeout(timer);
+        timer = setTimeout(reportSelection, 80);
+      });
+      document.addEventListener('mouseup', reportSelection);
+      document.addEventListener('keyup', reportSelection);
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+function createMarkdownPreviewProvider() {
+  return {
+    async resolveCustomTextEditor(document, webviewPanel) {
+      const localRoots = (vscode.workspace.workspaceFolders || []).map(f => f.uri);
+      try {
+        localRoots.push(getParentUri(document.uri));
+      } catch (_) {}
+
+      webviewPanel.webview.options = {
+        enableScripts: true,
+        localResourceRoots: localRoots
+      };
+
+      const entry = {
+        uri: document.uri,
+        filePath: formatUriPath(document.uri),
+        selectedText: ''
+      };
+      previewPanels.set(webviewPanel, entry);
+
+      const render = async () => {
+        let renderedHtml;
+        try {
+          const out = await vscode.commands.executeCommand('markdown.api.render', document.getText());
+          renderedHtml = typeof out === 'string' ? out : `<pre>${escapeHtml(document.getText())}</pre>`;
+        } catch (_) {
+          renderedHtml = `<pre>${escapeHtml(document.getText())}</pre>`;
+        }
+        const nonce = crypto.randomBytes(16).toString('hex');
+        webviewPanel.webview.html = buildMarkdownPreviewHtml(webviewPanel.webview, renderedHtml, nonce);
+      };
+
+      await render();
+      saveState(webviewPanel.active);
+
+      let renderTimer = null;
+      const changeDisp = vscode.workspace.onDidChangeTextDocument((e) => {
+        if (e.document.uri.toString() !== document.uri.toString()) return;
+        clearTimeout(renderTimer);
+        renderTimer = setTimeout(() => { render(); }, 150);
+      });
+
+      const msgDisp = webviewPanel.webview.onDidReceiveMessage((msg) => {
+        if (msg && msg.type === 'selection') {
+          entry.selectedText = typeof msg.text === 'string' ? msg.text : '';
+          saveState(true);
+        }
+      });
+
+      const viewDisp = webviewPanel.onDidChangeViewState(() => {
+        saveState(webviewPanel.active);
+      });
+
+      webviewPanel.onDidDispose(() => {
+        clearTimeout(renderTimer);
+        changeDisp.dispose();
+        msgDisp.dispose();
+        viewDisp.dispose();
+        previewPanels.delete(webviewPanel);
+        saveState(false);
+      });
+    }
+  };
+}
+
 function collectEditorState() {
   const remoteAuth = detectRemoteAuthority();
   const editor = vscode.window.activeTextEditor;
+  const activeTabResult = getActiveTabInfo();
+  const activeTab = activeTabResult ? activeTabResult.info : null;
+  const activeTabUri = activeTabResult ? activeTabResult.uri : null;
   const workspaceFolders = (vscode.workspace.workspaceFolders || []).map(f => ({
     name: f.name,
     scheme: f.uri.scheme,
@@ -139,11 +426,39 @@ function collectEditorState() {
   };
 
   if (!editor) {
+    const previewEntry = activeTab && activeTab.viewType === MD_PREVIEW_VIEW_TYPE
+      ? getActivePreviewEntry(activeTab)
+      : null;
+    if (previewEntry) {
+      const selText = previewEntry.selectedText || '';
+      return {
+        ...base,
+        hasActiveEditor: false,
+        editorKind: 'markdown-preview',
+        activeTab,
+        uriScheme: activeTabUri ? activeTabUri.scheme : null,
+        remoteAuthority: (activeTabUri && activeTabUri.authority) || remoteAuth,
+        languageId: 'markdown',
+        filePath: activeTab ? activeTab.filePath : previewEntry.filePath,
+        fullUri: activeTab ? activeTab.uri : (previewEntry.uri ? previewEntry.uri.toString() : null),
+        cursor: null,
+        selection: {
+          isEmpty: selText.length === 0,
+          start: null,
+          end: null,
+          selectedText: selText
+        }
+      };
+    }
     return {
       ...base,
       hasActiveEditor: false,
-      filePath: null,
-      fullUri: null,
+      editorKind: activeTab ? activeTab.tabType : 'none',
+      activeTab,
+      uriScheme: activeTabUri ? activeTabUri.scheme : null,
+      remoteAuthority: (activeTabUri && activeTabUri.authority) || remoteAuth,
+      filePath: activeTab ? activeTab.filePath : null,
+      fullUri: activeTab ? activeTab.uri : null,
       cursor: null,
       selection: null
     };
@@ -156,6 +471,8 @@ function collectEditorState() {
   return {
     ...base,
     hasActiveEditor: true,
+    editorKind: 'text',
+    activeTab,
     uriScheme: doc.uri.scheme,
     remoteAuthority: doc.uri.authority || remoteAuth,
     filePath: formatUriPath(doc.uri),
@@ -986,8 +1303,26 @@ function activate(context) {
   saveState(vscode.window.state.focused);
 
   context.subscriptions.push(
+    vscode.window.registerCustomEditorProvider(
+      MD_PREVIEW_VIEW_TYPE,
+      createMarkdownPreviewProvider(),
+      { webviewOptions: { retainContextWhenHidden: true } }
+    ),
+    vscode.commands.registerCommand('vscodeAntigravityMcp.openMarkdownPreview', async (resourceUri) => {
+      const activeTabInfo = getActiveTabInfo();
+      const uri = resourceUri
+        || (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri)
+        || (activeTabInfo && activeTabInfo.uri);
+      if (!uri) {
+        vscode.window.showWarningMessage('No active Markdown file to preview.');
+        return;
+      }
+      await vscode.commands.executeCommand('vscode.openWith', uri, MD_PREVIEW_VIEW_TYPE);
+    }),
     vscode.window.onDidChangeActiveTextEditor(() => saveState(true)),
     vscode.window.onDidChangeTextEditorSelection(() => saveState(true)),
+    vscode.window.tabGroups.onDidChangeTabs(() => saveState(true)),
+    vscode.window.tabGroups.onDidChangeTabGroups(() => saveState(true)),
     vscode.window.onDidChangeWindowState((e) => saveState(e.focused)),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       detectRemoteAuthority();
@@ -995,11 +1330,16 @@ function activate(context) {
     }),
     vscode.commands.registerCommand('vscodeAntigravityMcp.dumpState', () => {
       const s = saveState(true);
-      vscode.window.showInformationMessage(
-        s && s.hasActiveEditor
-          ? `File: ${s.filePath} | Ln ${s.cursor.line}, Col ${s.cursor.column} | Selected: ${s.selection.selectedText.length} chars`
-          : 'No active text editor'
-      );
+      let msg = 'No active text editor';
+      if (s && s.hasActiveEditor) {
+        msg = `File: ${s.filePath} | Ln ${s.cursor.line}, Col ${s.cursor.column} | Selected: ${s.selection.selectedText.length} chars`;
+      } else if (s && s.activeTab) {
+        const target = s.filePath || s.activeTab.label;
+        const kind = s.activeTab.viewType || s.activeTab.tabType;
+        const selNote = s.selection ? ` | Selected: ${s.selection.selectedText.length} chars` : '';
+        msg = `Active Tab (${kind}): ${target}${selNote}`;
+      }
+      vscode.window.showInformationMessage(msg);
     })
   );
 }

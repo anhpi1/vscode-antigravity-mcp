@@ -5,3 +5,5 @@ dist/
 *.tmp
 .DS_Store
 Thumbs.db
+.last-turn-state.json
+last-hook-run.json

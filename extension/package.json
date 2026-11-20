@@ -16,11 +16,37 @@
   ],
   "main": "./extension.js",
   "contributes": {
+    "customEditors": [
+      {
+        "viewType": "vscodeAntigravityMcp.markdownPreview",
+        "displayName": "Antigravity Markdown Preview",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
     "commands": [
       {
         "command": "vscodeAntigravityMcp.dumpState",
         "title": "VS Code MCP Bridge: Show Current Editor State"
+      },
+      {
+        "command": "vscodeAntigravityMcp.openMarkdownPreview",
+        "title": "Open Antigravity Markdown Preview",
+        "icon": "$(open-preview)"
       }
-    ]
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "vscodeAntigravityMcp.openMarkdownPreview",
+          "when": "resourceExtname == .md && activeCustomEditorId != vscodeAntigravityMcp.markdownPreview",
+          "group": "navigation"
+        }
+      ]
+    }
   }
 }

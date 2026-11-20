@@ -14,7 +14,9 @@
   "scripts": {
     "build": "node ./scripts/pack-vsix.js",
     "setup": "node ./scripts/install.js",
+    "setup-hook": "node ./scripts/install-hook.js",
     "uninstall-bridge": "node ./scripts/uninstall.js",
+    "uninstall-hook": "node ./scripts/install-hook.js --uninstall",
     "start": "node ./src/mcp-server.js",
     "test": "node ./test/test-mcp.js"
   },

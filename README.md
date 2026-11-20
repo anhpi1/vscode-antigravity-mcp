@@ -8,7 +8,7 @@ Zero-dependency **Model Context Protocol (MCP) Server** + **VS Code UI Extension
 
 - **1:1 Antigravity Tool Schemas:** Exact parameter names (`Path`, `StartLine`, `EndLine`, `ByteOffset`, `Target`, `Replacement`, `CommandLine`, `WaitMsBeforeAsync`, ...) and output formatting matching Antigravity's native toolset.
 - **Seamless Remote-SSH / WSL / Containers Support (Zero Remote Install):** Uses `"extensionKind": ["ui"]` + `vscode.workspace.fs` + VS Code Terminal Shell Integration (`^1.93.0`), allowing agents on your local machine to read, edit, search, and run commands inside remote SSH/WSL/Container windows **without installing anything on the remote server**.
-- **Live Editor Context & Undo-Safe Saves:** Reads live cursor position (`line`, `column`), highlighted selection (`selectedText`), open tabs, and compiler/LSP diagnostics (`Problems`). Edits on open tabs apply via `vscode.WorkspaceEdit` + `doc.save()` — saving immediately to disk while preserving `Ctrl+Z` Undo history in VS Code.
+- **Live Editor & Preview Context + Undo-Safe Saves:** Reads live cursor position (`line`, `column`), highlighted selection (`selectedText`), open tabs (including Preview / Custom Editor / Webview / Diff / Notebook tabs), and compiler/LSP diagnostics (`Problems`). Includes an optional **Antigravity Markdown Preview** (`*.md` custom editor) that captures live highlighted text directly inside rendered Markdown. Edits on open tabs apply via `vscode.WorkspaceEdit` + `doc.save()` — saving immediately to disk while preserving `Ctrl+Z` Undo history in VS Code.
 - **Multi-Window Smart Routing & Offline Fallback:** Automatically routes local vs. remote paths across multiple open VS Code windows, and falls back to standalone Node.js file/shell execution when VS Code is closed.
 - **Zero External Dependencies:** Pure Node.js (`>=18`), no `npm install` required. Works on Windows, macOS, and Linux.
 
@@ -80,6 +80,54 @@ Add to your `mcp_config.json` / `claude_desktop_config.json`:
 
 ---
 
+## Markdown Preview with Live Selection
+
+VS Code isolates built-in Webview previews (`vscode.markdown.preview.editor`), so external extensions can detect the active preview file path (`activeTab` / `filePath`) via `tabGroups`, but cannot read highlighted text inside built-in Webviews.
+
+To read **both** the active file path and live highlighted text while viewing rendered `.md` files:
+1. Open any `.md` file in VS Code.
+2. Click the **`Open Antigravity Markdown Preview`** icon in the top-right editor title bar (or right-click the file -> **Open With...** -> **Antigravity Markdown Preview**).
+3. Highlight any text in the rendered Markdown view — it is exposed through `vscode_get_editor_state` (and the optional PreInvocation hook below).
+
+---
+
+## Optional: Live Context PreInvocation Hook (Antigravity)
+
+This hook is **optional** and is **not** installed by `npm run setup`. When enabled, Antigravity automatically injects your active VS Code file path, cursor position, and highlighted text (from both text editors and **Antigravity Markdown Preview**) into every user turn without manually calling `vscode_get_editor_state`.
+
+### Install / Uninstall Hook
+
+```bash
+# Install optional PreInvocation hook into ~/.gemini/config/hooks.json
+npm run setup-hook
+# (Windows PowerShell without npm.ps1):
+node ./scripts/install-hook.js
+
+# Remove the hook
+npm run uninstall-hook
+# or:
+node ./scripts/install-hook.js --uninstall
+```
+
+### Manual Hook Configuration (`~/.gemini/config/hooks.json`)
+
+```json
+{
+  "vscode-live-cursor-and-selection": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node /absolute/path/to/vscode-antigravity-mcp/hooks/vscode-context-hook.js",
+        "timeout": 10
+      }
+    ]
+  }
+}
+```
+
+---
+
 ## Useful Commands
 
 ```bash
@@ -88,6 +136,10 @@ npm run build
 
 # Run automated MCP protocol tests
 npm test
+
+# Install / uninstall optional Antigravity PreInvocation hook
+npm run setup-hook
+npm run uninstall-hook
 
 # Uninstall extension from all VS Code profiles & remove MCP config entry
 npm run uninstall-bridge
